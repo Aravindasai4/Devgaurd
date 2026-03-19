@@ -1,0 +1,29 @@
+{
+  "url": "https://your-site.com",
+  "score": 6,
+  "verdict": "Red",
+  "stats": {
+    "status": 403,
+    "content_length": 199
+  },
+  "findings": [
+    {
+      "type": "https_hsts",
+      "severity": "medium",
+      "message": "Missing Strict-Transport-Security header on HTTPS site",
+      "evidence": null
+    },
+    {
+      "type": "https_hsts",
+      "severity": "medium",
+      "message": "HTTP variant returned 403, expected 301/308 redirect",
+      "evidence": "Status: 403"
+    },
+    {
+      "type": "csp",
+      "severity": "medium",
+      "message": "Missing Content-Security-Policy header",
+      "evidence": null
+    }
+  ]
+}

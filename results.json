@@ -1,0 +1,23 @@
+{
+  "url": "https://example.com",
+  "score": 4,
+  "verdict": "Yellow",
+  "stats": {
+    "status": 200,
+    "content_length": 648
+  },
+  "findings": [
+    {
+      "type": "https_hsts",
+      "severity": "medium",
+      "message": "Missing Strict-Transport-Security header on HTTPS site",
+      "evidence": null
+    },
+    {
+      "type": "csp",
+      "severity": "medium",
+      "message": "Missing Content-Security-Policy header",
+      "evidence": null
+    }
+  ]
+}

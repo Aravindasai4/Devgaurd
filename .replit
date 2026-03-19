@@ -1,0 +1,56 @@
+# .replit
+
+# .replit  (use run, not entrypoint)
+run = "python3 -m uvicorn server:app --host 0.0.0.0 --port 8000"
+modules = ["python-3.11"]
+
+[unitTest]
+language = "python3"
+
+[deployment]
+run = ["python3", "-m", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
+deploymentTarget = "cloudrun"
+
+[environment]
+pythonVersion = "3.11"
+
+[gitHubImport]
+requiredFiles = [".replit", "replit.nix"]
+
+[agent]
+expertMode = true
+
+[nix]
+packages = ["libxcrypt", "lsof"]
+
+[[ports]]
+localPort = 5000
+externalPort = 5000
+
+[[ports]]
+localPort = 8000
+externalPort = 80
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python3 -m uvicorn server:app --host 0.0.0.0 --port 5000"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"

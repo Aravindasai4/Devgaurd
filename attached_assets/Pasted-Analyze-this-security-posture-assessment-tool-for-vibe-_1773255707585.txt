@@ -1,0 +1,45 @@
+Analyze this security posture assessment tool (for vibe-coded applications) and provide the following information in a structured format:
+
+1. PROJECT OVERVIEW
+   - What is the core purpose of this security assessment tool?
+   - What does "vibe-coded applications" mean in this context?
+   - What security risks or vulnerabilities does it detect?
+   - What problem does this solve for no-code/low-code/AI-generated applications?
+   - Who is the target user? (developers, security teams, governance teams?)
+
+2. TECHNICAL STACK
+   - List all frameworks, libraries, and APIs used
+   - Frontend and backend technologies
+   - Any security scanning libraries or vulnerability databases?
+   - Static analysis tools integrated?
+   - AI/ML models for code analysis?
+
+3. SECURITY ASSESSMENT CAPABILITIES
+   - What types of vulnerabilities does it detect? (SQL injection, XSS, insecure auth, exposed secrets, etc.)
+   - Does it scan code, configurations, dependencies, or all of the above?
+   - What platforms does it assess? (Replit, Lovable, Glide, Bubble, other no-code platforms?)
+   - How does it handle AI-generated code specifically?
+   - What security frameworks or standards does it reference? (OWASP, CWE, etc.)
+
+4. ARCHITECTURE & WORKFLOW
+   - How does the assessment process work end-to-end?
+   - How does it ingest/scan code or applications?
+   - Where does the analysis happen? (client-side, server-side, external API?)
+   - What are the main components and how do they interact?
+   - How are results reported to users?
+
+5. KEY FEATURES
+   - Security scoring or risk rating system?
+   - Vulnerability categorization by severity?
+   - Remediation recommendations?
+   - Reporting/dashboard capabilities?
+   - Integration with CI/CD or development workflows?
+   - Batch scanning vs real-time analysis?
+
+6. IMPLEMENTATION HIGHLIGHTS
+   - Notable technical achievements
+   - Unique approaches to assessing vibe-coded/AI-generated apps
+   - How it differs from traditional security scanners
+   - Challenges solved during development
+
+Be specific and technical - this is for a GitHub README targeting AI governance, cybersecurity, and application security roles. Emphasize the governance angle for AI-generated and no-code applications.
