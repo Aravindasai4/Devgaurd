@@ -1,246 +1,374 @@
 # DevGuard
-1. PROJECT OVERVIEW
-Core Purpose:
-DevGuard is a lightweight, black-box HTTP security hygiene scanner built to detect misconfigured security headers, insecure cookie policies, and dangerous CORS settings on any publicly accessible web URL. It requires zero access to source code — it works entirely by inspecting the live HTTP responses a deployed application sends back. It was purpose-built with "vibe-coded" applications as the primary target audience.
 
-What "Vibe-Coded Applications" Means:
-"Vibe-coded" refers to applications built using AI-assisted code generation tools (Replit AI, GitHub Copilot, Cursor, ChatGPT, Claude) or no-code/low-code platforms (Lovable, Glide, Bubble, Webflow, AppGyver). The developer describes what they want and the tool generates the code. The result "vibes" — it functions, it looks right, it ships fast — but the underlying security configuration is almost always missing. AI code generators are trained on general code repositories and do not consistently emit HTTP security headers, CORS policies, or cookie flags unless explicitly instructed. The developer typically doesn't know these exist, and the AI doesn't volunteer them.
+**Black-box HTTP security hygiene scanner for vibe-coded and AI-generated applications.**
 
-Security Risks and Vulnerabilities Detected:
+![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python) ![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green?logo=fastapi) ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-Vulnerability	Category	Risk
-Missing Strict-Transport-Security header	Transport Security	Browser can be tricked into downgrading to HTTP, enabling MITM attacks
-HSTS with zero or invalid max-age	Transport Security	Header exists but provides no protection
-HTTP not redirecting to HTTPS with 301/308	Transport Security	Plain HTTP traffic not forced to secure channel
-Missing Content-Security-Policy header	Injection / XSS	No browser-enforced restriction on script sources; XSS attack surface fully open
-CSP containing unsafe-inline	Injection / XSS	Inline scripts allowed — the most common XSS vector
-CSP containing unsafe-eval	Injection / XSS	eval() allowed — enables dynamic code execution attacks
-CSP containing wildcard * in default-src or script-src	Injection / XSS	Scripts loadable from any domain
-CORS Access-Control-Allow-Origin: * + Access-Control-Allow-Credentials: true	Broken Access Control	Any website can make authenticated cross-origin requests to this API
-CORS reflects arbitrary Origin + Access-Control-Allow-Credentials: true	Broken Access Control	Attacker-controlled site can read credentialed responses
-Cookie missing Secure flag on HTTPS	Session Security	Cookie transmitted over unencrypted HTTP if a downgrade occurs
-Cookie missing HttpOnly flag	Session Security	Cookie readable via JavaScript — accessible to XSS payloads
-Problem It Solves for No-Code / AI-Generated Apps:
-When a developer ships a vibe-coded app, they typically check: does it load? does it work? does it look right? Nobody checks HTTP response headers because they are invisible to the end user. A missing CSP or a misconfigured CORS policy doesn't break anything visually — it just silently exposes the application to attack. Traditional security audits require source code access, deep expertise, or expensive tooling. DevGuard closes this gap: paste a URL, get a verdict in seconds, no expertise required.
+---
 
-Target Users:
+## What is DevGuard
 
-Developers shipping AI-generated or no-code apps who want a fast sanity check before going public
-Application Security engineers auditing a portfolio of internal or third-party apps
-AI Governance and Compliance teams who need to programmatically verify that AI-generated applications meet a minimum security baseline before approval
-Red team / penetration testers using it as a fast first-pass recon step before deeper manual testing
-2. TECHNICAL STACK
-Backend Framework: FastAPI (Python 3.11) — chosen for its automatic OpenAPI/Swagger docs, async support, and Pydantic-native request validation.
+DevGuard is a lightweight, black-box HTTP security scanner written in Python. It inspects any publicly accessible URL and checks for misconfigured security headers, insecure cookie policies, and dangerous CORS configurations — without requiring access to source code, build systems, or deployment infrastructure. You give it a URL; it gives you a verdict.
 
-ASGI Server: Uvicorn — runs the FastAPI application, configured to bind on 0.0.0.0:5000.
+It was built specifically to address a gap in how "vibe-coded" applications get deployed. Vibe-coded apps are built using AI-assisted code generation tools — Replit AI, GitHub Copilot, Cursor, ChatGPT, Claude — or no-code/low-code platforms like Lovable, Bubble, and Webflow. These tools generate functional application logic quickly, but they rarely emit HTTP security headers, CORS policies, or cookie flags unless the developer explicitly asks for them — and most developers building with these tools don't know to ask.
 
-HTTP Client: requests library (Python) — performs all outbound GET and OPTIONS requests to the target URL on behalf of the scanner.
+The result is a wave of deployed applications that look and work correctly but are silently misconfigured at the HTTP layer. A missing `Content-Security-Policy` doesn't break anything visually — it just leaves the door open for XSS. A misconfigured CORS policy won't affect normal users — it just lets attacker-controlled sites make credentialed cross-origin requests. DevGuard surfaces these issues in seconds, without requiring the developer to be a security engineer. For AI governance teams, the structured JSON output integrates directly into approval workflows: a `"verdict": "Red"` response becomes an automated gate before deployment promotion.
 
-CLI Framework: Click — provides the command-line interface with typed arguments, flags (--http-check, --json-out), and help text.
+---
 
-Terminal Rendering: Rich — renders colored tables, verdict panels, and formatted output to the terminal for CLI usage.
+## What It Detects
 
-Data Validation: Pydantic v2 — validates the incoming JSON body on POST /scan via the ScanReq model.
+| Check | What's Tested | Severity | OWASP / RFC Reference |
+|---|---|---|---|
+| **HTTPS + HSTS** | Presence of `Strict-Transport-Security` header with valid `max-age > 0` | Medium | OWASP A02, RFC 6797 |
+| **HTTP Redirect** | `http://` variant returns 301/308 with `https://` `Location` header (opt-in via `--http-check`) | Medium | OWASP A02, RFC 6797 |
+| **CSP Missing** | No `Content-Security-Policy` header present | Medium | OWASP A03, W3C CSP Level 3 |
+| **CSP Weak: wildcard** | `default-src` or `script-src` contains `*` | Medium | OWASP A03, W3C CSP Level 3 |
+| **CSP Weak: unsafe-inline** | `default-src` or `script-src` contains `'unsafe-inline'` | Medium | OWASP A03, W3C CSP Level 3 |
+| **CSP Weak: unsafe-eval** | `default-src` or `script-src` contains `'unsafe-eval'` | Medium | OWASP A03, W3C CSP Level 3 |
+| **CORS: wildcard + credentials** | `Access-Control-Allow-Origin: *` with `Access-Control-Allow-Credentials: true` | **High** | OWASP A01, RFC 6454 |
+| **CORS: origin reflection + credentials** | Server echoes `Origin: https://evil.example` back with `Access-Control-Allow-Credentials: true` | Medium | OWASP A01, RFC 6454 |
+| **Cookie: missing Secure** | `Set-Cookie` header lacks `Secure` attribute on an HTTPS site | Low | OWASP A07, RFC 6265 |
+| **Cookie: missing HttpOnly** | `Set-Cookie` header lacks `HttpOnly` attribute | Low | OWASP A07, RFC 6265 |
 
-Frontend: Pure HTML/CSS/JavaScript, served as an inline string from FastAPI's HTMLResponse. No build step, no bundler, no npm. The entire UI is embedded directly in server.py.
+CORS checks use a live OPTIONS preflight with `Origin: https://evil.example` to detect both static wildcard configs and dynamic origin-reflection behaviors. Cookie headers are inspected individually using raw `urllib3` header access (`response.raw.headers.getlist("Set-Cookie")`) to avoid the `requests` library's header-merge behavior.
 
-API Documentation: Swagger UI — automatically generated by FastAPI, available at /docs.
+---
 
-Security Scanning Libraries: None. All scanning logic is custom-implemented using Python's standard re module for header parsing and requests for HTTP inspection. There are no integrations with external vulnerability databases (NVD, CVE, Snyk, etc.).
+## How It Works
 
-Static Analysis Tools: None. DevGuard is a runtime/black-box scanner only — it does not parse, compile, or statically analyze source code.
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         INPUT                               │
+│  Web UI (POST /scan)  │  CLI (python devguard.py <url>)     │
+│  API (POST /scan JSON)│  Demo mode (uses example.org)       │
+└───────────────────────┬─────────────────────────────────────┘
+                        │
+                        ▼
+                 normalize_url()
+           (strip whitespace, prepend https://)
+                        │
+                        ▼
+           ┌────────────────────────┐
+           │  requests.get(url)     │  ← Primary HTTP GET (timeout: 15s)
+           │  User-Agent: DevGuard  │    All 4 checks run on this response
+           └────────────┬───────────┘
+                        │
+          ┌─────────────┼──────────────────────┐
+          ▼             ▼             ▼         ▼
+   check_https_hsts  check_csp  check_cors  check_cookies
+          │                        │
+          │ (if --http-check)      │ requests.options(url,
+          └─ requests.get(http://) │   Origin: https://evil.example)
+                                   │
+          └─────────────┬──────────┘
+                        ▼
+              SecurityScanner.score
+              SecurityScanner.verdict()
+              → "Green" / "Yellow" / "Red"
+                        │
+          ┌─────────────┼───────────────────┐
+          ▼             ▼                   ▼
+      JSON API      Web UI            CLI (Rich)
+   (POST /scan)  findings cards    colored table +
+                 + score bar       verdict panel +
+                                   exit code 0/1
+```
 
-AI/ML Models: None. All detection logic is deterministic rule-based inspection of HTTP response headers and cookie attributes.
+All scanning is performed server-side. The browser client never contacts the scan target directly — it sends a single `POST /scan` request to the FastAPI backend, which handles all outbound HTTP requests to the target URL. Each full scan issues 2–3 outbound requests: one `GET` (always), one `OPTIONS` for CORS (always), and one `GET` to the `http://` variant (only if `http_check` is enabled).
 
-Full dependency list (requirements.txt):
+---
 
-requests
-click
-rich
-fastapi
-uvicorn
-python-multipart
-pydantic
-reportlab
-3. SECURITY ASSESSMENT CAPABILITIES
-Vulnerability Detection in Detail:
+## Scoring & Verdicts
 
-HTTPS + HSTS (check_https_hsts):
+**Penalty model** — points are added per finding. Lower score = better security posture.
 
-Confirms the target URL uses https:// scheme
-Checks for the presence of a Strict-Transport-Security response header
-Parses the max-age directive using regex (max-age\s*=\s*(\d+)) and validates it is a positive integer
-Optionally (via --http-check flag or http_check: true in the API): fires a separate GET request to the http:// variant of the URL with allow_redirects=False, then verifies the response is a 301 or 308 redirect, and that the Location header begins with https://
-CSP (check_csp):
+| Severity | Points | Examples |
+|---|---|---|
+| High | +3 | CORS wildcard + credentials |
+| Medium | +2 | Missing HSTS, missing CSP, weak CSP directive, CORS origin reflection |
+| Low | +1 | Missing cookie `Secure` or `HttpOnly` flag |
+| Cookie cap | max +2 total | All cookie findings combined never exceed +2 points |
 
-Checks for the presence of a Content-Security-Policy response header
-If present, extracts the default-src and script-src directive values using regex
-Tests each directive value for the presence of three weak tokens: *, 'unsafe-inline', 'unsafe-eval'
-Reports one finding per weak token found, with the full raw CSP header attached as evidence
-CORS (check_cors):
+**Verdict thresholds:**
 
-Fires an HTTP OPTIONS preflight request to the target URL with two custom headers:
-Origin: https://evil.example — a synthetic attacker-controlled origin
-Access-Control-Request-Method: GET
-Reads the response's Access-Control-Allow-Origin (ACAO) and Access-Control-Allow-Credentials (ACC) headers
-High severity finding if ACAO is * and ACC is true — this combination is technically invalid per the CORS spec but some servers incorrectly allow it, and it represents a complete authentication bypass for API endpoints
-Medium severity finding if ACAO exactly matches https://evil.example (origin reflection) and ACC is true — the server dynamically mirrors the attacker's origin, granting full credentialed cross-origin access
-Cookie Flags (check_cookies):
+| Score | Verdict | Governance Meaning |
+|---|---|---|
+| 0–2 | ✅ Green | Acceptable security posture — no blocking issues detected |
+| 3–4 | ⚠️ Yellow | Notable misconfigurations — review recommended before production |
+| 5+ | 🚨 Red | Significant vulnerabilities — flag for security review; block deployment promotion |
 
-Reads all Set-Cookie response headers by accessing the underlying urllib3 raw header list (response.raw.headers.getlist("Set-Cookie")) — this is critical because the requests library merges duplicate headers, losing individual cookie data
-Falls back to the single merged Set-Cookie header if raw access fails
-For each cookie on an HTTPS site: checks for the secure attribute (case-insensitive substring search on lowercased header string)
-For each cookie regardless of scheme: checks for the httponly attribute
-Each missing flag generates one finding, but cookie findings are capped at +2 score points total — a deliberate design choice to prevent many insecure cookies from artificially inflating the severity verdict when compared to more impactful issues like missing HSTS or CSP
-What It Scans: Runtime HTTP responses only. It does not scan:
+The CLI exits with code `1` on Red and `0` on Green or Yellow, enabling use as a CI/CD pipeline gate.
 
-Source code
-Configuration files (.env, config.yaml, etc.)
-Dependency manifests (package.json, requirements.txt)
-Infrastructure configuration (Terraform, Docker, etc.)
-Database configurations
-Platform Coverage: Platform-agnostic. Any URL that returns an HTTP response is scannable — whether built on Replit, Lovable, Glide, Bubble, Webflow, Vercel, Netlify, a hand-coded VPS, or a corporate data center.
+---
 
-How It Handles AI-Generated Code: Indirectly but effectively. AI code generators emit application logic but rarely emit security middleware or headers. DevGuard checks the deployed runtime output — if the AI didn't generate the headers, the scanner finds them missing. It doesn't need to understand the code; it just needs the URL.
+## Quick Start
 
-Security Standards Referenced:
+**Requirements:** Python 3.11+
 
-OWASP Top 10: A01 (Broken Access Control — CORS), A02 (Cryptographic Failures — HSTS), A03 (Injection / XSS — CSP), A05 (Security Misconfiguration — all checks), A07 (Identification & Authentication Failures — cookies)
-RFC 6797: HTTP Strict Transport Security (HSTS)
-W3C Content Security Policy Level 3
-RFC 6454: The Web Origin Concept (CORS)
-RFC 6265: HTTP State Management Mechanism (Cookie attributes)
-4. ARCHITECTURE & WORKFLOW
-End-to-End Assessment Process:
+```bash
+# Install dependencies
+pip install -r requirements.txt
 
-Step 1: Input
-  Web UI  →  POST /scan  {"url": "https://target.com"}
-  CLI     →  python devguard.py https://target.com [--http-check] [--json-out result.json]
-  API     →  POST /scan  {"demo": true}  (uses https://example.org as target)
-Step 2: URL Normalization
-  normalize_url() strips whitespace, prepends "https://" if no scheme present
-Step 3: Primary HTTP Fetch
-  requests.get(url, timeout=15, headers={"User-Agent": "DevGuard/1.0"})
-  Single GET request — all four header checks run against this one response
-Step 4: Four Sequential Security Checks
-  check_https_hsts(response, url, http_check)
-    └── Optional: requests.get(http_url, allow_redirects=False)
-  check_csp(response)
-  check_cors(url)
-    └── requests.options(url, headers={Origin: https://evil.example, ...})
-  check_cookies(response, url)
-Step 5: Scoring & Verdict
-  SecurityScanner.score accumulates penalty points
-  SecurityScanner.verdict() returns "Green" / "Yellow" / "Red"
-Step 6: Output
-  Web UI  →  JSON response rendered as colored finding cards + score bar
-  CLI     →  Rich table + verdict panel printed to terminal, exit code 0 or 1
-  API     →  Raw JSON {"url", "score", "verdict", "stats", "findings": [...]}
-How It Ingests/Scans:
-The scanner makes 2–3 outbound HTTP requests per scan:
+# Start the web server
+python3 -m uvicorn server:app --host 0.0.0.0 --port 5000
 
-One GET to the target URL (always)
-One OPTIONS to the target URL for CORS preflight (always)
-One GET to the http:// variant (only if http_check is enabled)
-All requests carry a custom User-Agent: DevGuard/1.0 header and a 15-second timeout.
+# Open the web UI
+# → http://localhost:5000/ui
 
-Where Analysis Happens:
-100% server-side. The FastAPI backend makes all outbound HTTP requests. The browser client sends a single POST /scan request and receives a JSON result. The client never contacts the target URL.
+# Or use the CLI directly
+python devguard.py https://example.org
 
-Main Components and Interactions:
+# With optional HTTP redirect check
+python devguard.py https://example.org --http-check
 
-devguard.py
-├── SecurityFinding          — Data class: type, severity, message, evidence
-├── SecurityScanner          — Stateful scanner: accumulates findings, computes score
-│   ├── check_https_hsts()
-│   ├── check_csp()
-│   ├── check_cors()
-│   └── check_cookies()
-├── scan_url()               — Public API used by both FastAPI and CLI
-├── normalize_url()          — Input sanitization
-└── scan() CLI command       — Click entry point → calls scan_url() → Rich output
-server.py
-├── GET  /                   — HTML landing page with links
-├── GET  /ui                 — Full inline HTML/JS web interface
-├── POST /scan               — Accepts ScanReq, calls scan_url(), returns JSONResponse
-└── GET  /report.pdf         — Placeholder stub (no functional PDF generation)
-How Results Are Reported:
+# Write JSON output to file
+python devguard.py https://example.org --json-out result.json
+```
 
-Web UI: A score from 0–100 displayed with a progress bar (front-end maps the penalty score), followed by a card per finding showing severity badge (color-coded RED/MEDIUM/LOW), finding message, and raw evidence (header value).
+**Example CLI output:**
 
-REST API: Structured JSON:
+```
+╭─────────────── Security Verdict ───────────────╮
+│ ⚠️  Yellow  (Score: 4, Findings: 2)            │
+╰────────────────────────────────────────────────╯
 
+╭──────────────── Response Summary ──────────────╮
+│ Status: 200  |  Content Length: 648 bytes      │
+╰────────────────────────────────────────────────╯
+
+              Security Findings
+┏━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Severity ┃ Type       ┃ Message                                  ┃
+┡━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ MEDIUM   │ https_hsts │ Missing Strict-Transport-Security header │
+│ MEDIUM   │ csp        │ Missing Content-Security-Policy header   │
+└──────────┴────────────┴──────────────────────────────────────────┘
+```
+
+---
+
+## API Reference
+
+### `POST /scan`
+
+Run a security scan against a target URL.
+
+**Request — scan a URL:**
+```json
+{
+  "url": "https://target.example.com",
+  "http_check": false
+}
+```
+
+**Request — run demo scan (uses `example.org` as target):**
+```json
+{
+  "demo": true
+}
+```
+
+**Response:**
+```json
 {
   "url": "https://example.com",
   "score": 4,
   "verdict": "Yellow",
-  "stats": { "status": 200, "content_length": 648 },
+  "stats": {
+    "status": 200,
+    "content_length": 648
+  },
   "findings": [
     {
       "type": "https_hsts",
       "severity": "medium",
       "message": "Missing Strict-Transport-Security header on HTTPS site",
       "evidence": null
+    },
+    {
+      "type": "csp",
+      "severity": "medium",
+      "message": "Missing Content-Security-Policy header",
+      "evidence": null
     }
   ]
 }
-CLI: Rich-formatted terminal output with a color-bordered verdict panel, response stats panel, and a table of all findings with severity, type, message, and evidence columns.
+```
 
-5. KEY FEATURES
-Security Scoring System:
-Additive penalty model. Each finding adds points based on severity. Lower score = better security.
+**Finding field reference:**
 
-Severity	Points Added	Examples
-High	+3	CORS wildcard + credentials
-Medium	+2	Missing HSTS, missing CSP, weak CSP directives, CORS origin reflection
-Low	+1	Missing cookie flags (capped at +2 total across all cookie findings)
-Verdict Thresholds:
+| Field | Values | Notes |
+|---|---|---|
+| `type` | `https_hsts` \| `csp` \| `cors` \| `cookie` | Category of the finding |
+| `severity` | `high` \| `medium` \| `low` | Determines penalty points applied to score |
+| `message` | String | Human-readable description of the issue |
+| `evidence` | String or `null` | Raw header value when available, otherwise `null` |
 
-Score	Verdict	Meaning
-0–2	Green ✅	Acceptable security posture
-3–4	Yellow ⚠️	Notable issues, review recommended
-5+	Red 🚨	Significant vulnerabilities present
-Vulnerability Categorization by Severity: Yes — every finding in the JSON output and UI carries a severity field (high / medium / low) and a type field (https_hsts / csp / cors / cookie).
+---
 
-Remediation Recommendations: Not currently present. Findings describe the problem and optionally include the raw header value as evidence, but the output does not include fix instructions.
+### `GET /ui`
 
-Reporting / Dashboard: Lightweight single-scan UI only. No persistent storage, no historical scans, no multi-URL dashboard, no trend tracking.
+Web-based scan interface. Supports URL input, demo mode, and quick-pick public test targets (`httpbin.org`, `badssl.com`, `jsonplaceholder.typicode.com`, `example.org`). Displays findings as severity-badged cards with a score progress bar. No authentication required.
 
-CI/CD Integration: The CLI exits with code 1 on a Red verdict and 0 on Green or Yellow. This makes it directly usable as a gate in any shell-based pipeline. Example GitHub Actions usage:
+### `GET /docs`
 
-- run: python devguard.py https://your-app.replit.app
-A Red result fails the pipeline step.
+Swagger UI — auto-generated interactive API documentation provided by FastAPI.
 
-Batch vs. Real-Time: Single URL, synchronous, real-time only. No batch scanning, no queuing, no scheduling. Each scan is an isolated synchronous HTTP request chain completing in 1–5 seconds depending on target response time.
+### `GET /report.pdf`
 
-6. IMPLEMENTATION HIGHLIGHTS
-Raw urllib3 Cookie Header Access:
-The requests library automatically merges duplicate Set-Cookie headers into a single comma-joined string during response parsing. This means a response with three separate cookies collapses into one string, making it impossible to inspect individual cookie attributes accurately. DevGuard bypasses this by accessing response.raw.headers.getlist("Set-Cookie") directly on the urllib3 raw response object, preserving each cookie as a separate string. A try/except fallback handles edge cases where raw header access fails.
+Returns a minimal placeholder PDF stub. **PDF report generation is not implemented.** This endpoint exists solely to prevent 404 errors from external tooling that links to it.
 
-Active CORS Probing:
-Rather than passively reading the Access-Control-Allow-Origin header from the GET response (which only shows the value for the actual request's origin), DevGuard actively fires an OPTIONS preflight with Origin: https://evil.example. This detects origin-reflection behaviors — servers that dynamically echo back whatever Origin header they receive — which would not be detectable from a passive header read. This is the technique actual CORS bypass attacks use.
+---
 
-Cookie Scoring Cap:
-Cookie security issues are low-severity compared to missing HSTS or CSP. A site with 20 session cookies all missing HttpOnly should not score Red just because of cookies. The scanner caps the total penalty contribution from cookie findings at +2 points regardless of how many cookies are present. This prevents cookie volume from distorting the overall verdict.
+## CI/CD Integration
 
-Fully Self-Contained Two-File Architecture:
-The entire tool — scanner engine, REST API, and web UI — lives in two Python files totaling ~450 lines. No build step, no asset pipeline, no database, no external services. It installs with pip install -r requirements.txt and runs with one command.
+The CLI exits with code `1` on a Red verdict and `0` on Green or Yellow. Use this to gate deployments in any shell-based pipeline.
 
-Zero-Source-Code Requirement:
-Traditional SAST tools (Semgrep, Bandit, SonarQube) require source code access. DevGuard requires only a URL. This means it can audit third-party apps, vendor-supplied tools, client deliverables, or any app where you don't control the repository — which is the exact scenario for AI-generated and no-code applications.
+**GitHub Actions example:**
 
-Governance-Ready JSON Output:
-The structured JSON response is designed for programmatic consumption. An AI governance team could wrap /scan in an approval workflow: any app URL returning "verdict": "Red" is automatically flagged for security review before deployment promotion. The findings array provides machine-readable evidence with field-level detail (type, severity, message, evidence) that can be logged, stored, and audited.
+```yaml
+name: Security Gate
 
-How It Differs from Traditional Scanners:
+on:
+  push:
+    branches: [main]
+  pull_request:
 
-Dimension	DevGuard	Traditional Scanners (ZAP, Burp, Semgrep)
-Setup time	Seconds	Hours to days
-Source code required	No	Often yes (SAST)
-Expertise required	None	Significant
-Scan time	1–5 seconds	Minutes to hours
-Coverage	4 focused HTTP checks	Hundreds of vulnerability classes
-Output format	Clean JSON + UI	Complex reports
-CI/CD integration	Single shell command	Complex pipeline configuration
-Target audience	App developers, governance teams	Security professionals
-The tradeoff is intentional: DevGuard sacrifices coverage breadth for near-zero friction. A tool that any developer can use in 10 seconds will get used. A tool that requires a security engineer to configure and interpret will not be used on vibe-coded apps.
+jobs:
+  devguard-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install DevGuard
+        run: pip install -r requirements.txt
+
+      - name: Run security scan
+        run: |
+          python devguard.py ${{ secrets.DEPLOY_URL }} \
+            --http-check \
+            --json-out scan-result.json
+
+      - name: Upload scan result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: devguard-scan-result
+          path: scan-result.json
+```
+
+A Red verdict causes the `Run security scan` step to exit with code `1`, failing the workflow and blocking any dependent deployment steps. The JSON artifact is uploaded regardless of outcome to preserve an audit trail.
+
+---
+
+## Governance Use Case
+
+DevGuard is part of a 4-layer AI governance portfolio, positioned as the **Security Posture Layer**. It addresses a specific gap: AI-generated and no-code applications ship without systematic HTTP security review because no lightweight, code-free tooling existed for this purpose.
+
+**How governance teams use the JSON output:**
+
+The `POST /scan` response is machine-readable and designed for direct integration into approval workflows. The `verdict` field is the primary signal:
+
+```python
+import requests
+
+result = requests.post(
+    "https://your-devguard-instance/scan",
+    json={"url": app_url}
+).json()
+
+if result["verdict"] == "Red":
+    block_deployment(app_id, reason=result["findings"])
+elif result["verdict"] == "Yellow":
+    flag_for_review(app_id, findings=result["findings"])
+else:
+    approve_deployment(app_id)
+```
+
+**Integration points for governance workflows:**
+
+| Use Case | How DevGuard Is Used |
+|---|---|
+| **Pre-deployment gate** | Scan staging URL before promoting to production; block on Red verdict |
+| **Periodic audit** | Schedule scans against all live app URLs; store results; alert on verdict regressions |
+| **Third-party / vendor review** | Scan supplier-provided app URLs without source code or infrastructure access |
+| **AI app registry** | Attach DevGuard verdict to each entry in an internal registry of AI-generated tools |
+| **Compliance evidence** | Store `findings` array (`type`, `severity`, `message`, `evidence`) as field-level audit trail data |
+
+The `stats.status` field confirms the target was reachable and returned a live response. The `stats.content_length` field confirms a non-empty response body. Both are included in every scan result to validate scan integrity.
+
+---
+
+## Known Limitations
+
+These are current limitations of the implementation, documented without omission.
+
+- **No remediation guidance.** Findings describe what is wrong (e.g., `"Missing Content-Security-Policy header"`) but do not explain how to fix it or provide example correct header values.
+- **No SSRF protection.** The `/scan` endpoint does not validate or block internal IP ranges (`127.0.0.1`, `10.x.x.x`, `192.168.x.x`, `169.254.169.254`, etc.). In a shared or multi-tenant deployment, a user could use the scanner to probe internal services.
+- **Score display inconsistency.** The web UI renders the raw penalty score as `X/100` with a progress bar. Since the scoring model is additive penalty (not a 0–100 percentage), a score of `4` displays as `4/100` — which looks low but represents a Yellow verdict. The frontend does not invert or normalize the score.
+- **No persistent storage.** Scan results are not saved server-side. There is no scan history, no dashboard, and no trend tracking across multiple scans or time periods.
+- **No batch scanning.** One URL per `POST /scan` request. No queue, no scheduling, no multi-target sweep mode.
+- **No functional PDF export.** `GET /report.pdf` returns a minimal stub file with a valid PDF header but no content. It is not a real report.
+- **Runtime-only, black-box scanning.** DevGuard does not scan source code, `.env` files, `config.yaml`, `package.json`, infrastructure definitions, or any static artifact. It only inspects live HTTP responses from a deployed, running application.
+- **HTTP redirect check is opt-in.** The `http://` → `https://` redirect check is disabled by default and must be explicitly enabled via `--http-check` (CLI) or `"http_check": true` in the API request body. Scans without this flag will not detect missing or misconfigured HTTP redirects.
+
+---
+
+## Tech Stack
+
+| Component | Technology |
+|---|---|
+| Language | Python 3.11 |
+| Backend framework | FastAPI |
+| ASGI server | Uvicorn |
+| HTTP client | `requests` |
+| CLI | Click |
+| Terminal rendering | Rich |
+| Request validation | Pydantic v2 |
+| Frontend | Inline HTML/CSS/JS (no build step, no bundler) |
+| API docs | Swagger UI (built into FastAPI at `/docs`) |
+| Vulnerability databases | None — fully rule-based |
+| ML / AI models | None |
+
+---
+
+## Project Structure
+
+```
+devguard/
+├── devguard.py        # Scanner engine: SecurityFinding, SecurityScanner,
+│                      # scan_url() API, normalize_url(), Click CLI entry point
+├── server.py          # FastAPI app: /scan endpoint, /ui inline web interface,
+│                      # /report.pdf stub, ScanReq Pydantic model
+├── main.py            # Uvicorn entry point (currently empty stub)
+├── requirements.txt   # Python dependencies
+├── results.json       # Sample scan output for example.com (Yellow verdict)
+└── generated-icon.png # Project icon asset
+```
+
+**Key internals:**
+
+- `SecurityFinding` — data class holding `type`, `severity`, `message`, and `evidence` per finding
+- `SecurityScanner` — stateful accumulator: collects findings, computes penalty score, returns verdict via `verdict()`
+- `scan_url(url, http_check)` — shared programmatic API called by both the FastAPI route handler and the Click CLI command
+- `ScanReq` — Pydantic model for `POST /scan` request body validation (`url`, `demo`, `http_check` fields)
+
+---
+
+## Built With
+
+This project was built using AI-assisted development — Replit AI, Claude, and ChatGPT — as part of an AI governance portfolio demonstrating that vibe-coded tools can be audited, assessed, and governed. DevGuard is itself an example of what it scans: an AI-generated application that has been reviewed for HTTP security hygiene.
+
+GitHub: [Aravindasai4](https://github.com/Aravindasai4)
+
+---
+
+## License
+
+MIT License. See `LICENSE` for details.
