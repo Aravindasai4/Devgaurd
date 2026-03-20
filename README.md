@@ -1,4 +1,4 @@
-# Devgaurd
+# DevGuard
 1. PROJECT OVERVIEW
 Core Purpose:
 DevGuard is a lightweight, black-box HTTP security hygiene scanner built to detect misconfigured security headers, insecure cookie policies, and dangerous CORS settings on any publicly accessible web URL. It requires zero access to source code — it works entirely by inspecting the live HTTP responses a deployed application sends back. It was purpose-built with "vibe-coded" applications as the primary target audience.
