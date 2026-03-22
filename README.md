@@ -49,6 +49,10 @@ CORS checks use a live OPTIONS preflight with `Origin: https://evil.example` to 
            (strip whitespace, prepend https://)
                         │
                         ▼
+              is_safe_url() — SSRF check
+         (blocks localhost, private IPs, metadata endpoints)
+                        │
+                        ▼
            ┌────────────────────────┐
            │  requests.get(url)     │  ← Primary HTTP GET (timeout: 15s)
            │  User-Agent: DevGuard  │    All 4 checks run on this response
@@ -71,11 +75,13 @@ CORS checks use a live OPTIONS preflight with `Origin: https://evil.example` to 
           ▼             ▼                   ▼
       JSON API      Web UI            CLI (Rich)
    (POST /scan)  findings cards    colored table +
-                 + score bar       verdict panel +
+                 + health bar      verdict panel +
                                    exit code 0/1
 ```
 
 All scanning is performed server-side. The browser client never contacts the scan target directly — it sends a single `POST /scan` request to the FastAPI backend, which handles all outbound HTTP requests to the target URL. Each full scan issues 2–3 outbound requests: one `GET` (always), one `OPTIONS` for CORS (always), and one `GET` to the `http://` variant (only if `http_check` is enabled).
+
+If the target URL is unreachable (timeout, DNS failure, SSL error, connection refused), `scan_url()` returns a clean JSON error response with `"verdict": "Error"` rather than raising an unhandled exception.
 
 ---
 
@@ -99,6 +105,8 @@ All scanning is performed server-side. The browser client never contacts the sca
 | 5+ | 🚨 Red | Significant vulnerabilities — flag for security review; block deployment promotion |
 
 The CLI exits with code `1` on Red and `0` on Green or Yellow, enabling use as a CI/CD pipeline gate.
+
+> **Note for governance integrations:** The `score` field is an additive penalty value (lower = better), not a 0–100 percentage. The web UI displays an inverted **Security Health** percentage (higher = better) for human readability. Use `verdict` as the primary decision signal in automated workflows.
 
 ---
 
@@ -169,7 +177,7 @@ Run a security scan against a target URL.
 }
 ```
 
-**Response:**
+**Response — successful scan:**
 ```json
 {
   "url": "https://example.com",
@@ -196,6 +204,18 @@ Run a security scan against a target URL.
 }
 ```
 
+**Response — scan error (target unreachable):**
+```json
+{
+  "url": "https://unreachable.example.com",
+  "error": "Request timed out. The target did not respond within 15 seconds.",
+  "score": 0,
+  "verdict": "Error",
+  "stats": {},
+  "findings": []
+}
+```
+
 **Finding field reference:**
 
 | Field | Values | Notes |
@@ -209,7 +229,7 @@ Run a security scan against a target URL.
 
 ### `GET /ui`
 
-Web-based scan interface. Supports URL input, demo mode, and quick-pick public test targets (`httpbin.org`, `badssl.com`, `jsonplaceholder.typicode.com`, `example.org`). Displays findings as severity-badged cards with a score progress bar. No authentication required.
+Web-based scan interface. Supports URL input, demo mode, and quick-pick public test targets (`httpbin.org`, `badssl.com`, `jsonplaceholder.typicode.com`, `example.org`). Displays findings as severity-badged cards with a colour-coded Security Health bar (0–100, higher = better). No authentication required.
 
 ### `GET /docs`
 
@@ -310,13 +330,12 @@ The `stats.status` field confirms the target was reachable and returned a live r
 These are current limitations of the implementation, documented without omission.
 
 - **No remediation guidance.** Findings describe what is wrong (e.g., `"Missing Content-Security-Policy header"`) but do not explain how to fix it or provide example correct header values.
-- **No SSRF protection.** The `/scan` endpoint does not validate or block internal IP ranges (`127.0.0.1`, `10.x.x.x`, `192.168.x.x`, `169.254.169.254`, etc.). In a shared or multi-tenant deployment, a user could use the scanner to probe internal services.
-- **Score display inconsistency.** The web UI renders the raw penalty score as `X/100` with a progress bar. Since the scoring model is additive penalty (not a 0–100 percentage), a score of `4` displays as `4/100` — which looks low but represents a Yellow verdict. The frontend does not invert or normalize the score.
 - **No persistent storage.** Scan results are not saved server-side. There is no scan history, no dashboard, and no trend tracking across multiple scans or time periods.
 - **No batch scanning.** One URL per `POST /scan` request. No queue, no scheduling, no multi-target sweep mode.
 - **No functional PDF export.** `GET /report.pdf` returns a minimal stub file with a valid PDF header but no content. It is not a real report.
 - **Runtime-only, black-box scanning.** DevGuard does not scan source code, `.env` files, `config.yaml`, `package.json`, infrastructure definitions, or any static artifact. It only inspects live HTTP responses from a deployed, running application.
 - **HTTP redirect check is opt-in.** The `http://` → `https://` redirect check is disabled by default and must be explicitly enabled via `--http-check` (CLI) or `"http_check": true` in the API request body. Scans without this flag will not detect missing or misconfigured HTTP redirects.
+- **Cookie `Secure` flag detection uses substring matching.** The check uses `"secure" not in cookie_header.lower()`, which could theoretically false-positive on a cookie name containing the word "secure" (e.g., `insecure_token`). In practice this is extremely unlikely but is a known edge case.
 
 ---
 
@@ -345,8 +364,8 @@ devguard/
 ├── devguard.py        # Scanner engine: SecurityFinding, SecurityScanner,
 │                      # scan_url() API, normalize_url(), Click CLI entry point
 ├── server.py          # FastAPI app: /scan endpoint, /ui inline web interface,
-│                      # /report.pdf stub, ScanReq Pydantic model
-├── main.py            # Uvicorn entry point (currently empty stub)
+│                      # /report.pdf stub, ScanReq Pydantic model, SSRF protection
+├── main.py            # Uvicorn entry point
 ├── requirements.txt   # Python dependencies
 ├── results.json       # Sample scan output for example.com (Yellow verdict)
 └── generated-icon.png # Project icon asset
@@ -356,7 +375,8 @@ devguard/
 
 - `SecurityFinding` — data class holding `type`, `severity`, `message`, and `evidence` per finding
 - `SecurityScanner` — stateful accumulator: collects findings, computes penalty score, returns verdict via `verdict()`
-- `scan_url(url, http_check)` — shared programmatic API called by both the FastAPI route handler and the Click CLI command
+- `scan_url(url, http_check)` — shared programmatic API called by both the FastAPI route handler and the Click CLI command; returns a clean error dict on connection failures rather than raising exceptions
+- `is_safe_url(url)` — SSRF protection: validates the target resolves to a globally routable IP before allowing the scan to proceed
 - `ScanReq` — Pydantic model for `POST /scan` request body validation (`url`, `demo`, `http_check` fields)
 
 ---
