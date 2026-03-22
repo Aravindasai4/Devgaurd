@@ -1,11 +1,41 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 import io
-
+import ipaddress
+import socket
+from urllib.parse import urlparse
 from devguard import scan_url
 
 app = FastAPI(title="DevGuard Backend", version="0.1")
+
+# ---- SSRF Protection ----
+BLOCKED_HOSTS = {
+    "localhost", "127.0.0.1", "0.0.0.0",
+    "169.254.169.254",  # AWS/GCP metadata
+    "metadata.google.internal",
+}
+
+def is_safe_url(url: str) -> bool:
+    """Block internal IPs and reserved ranges to prevent SSRF."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        host = parsed.hostname or ""
+        if host.lower() in BLOCKED_HOSTS:
+            return False
+        # Resolve hostname to IP and check if it's global
+        try:
+            ip_str = socket.gethostbyname(host)
+            ip = ipaddress.ip_address(ip_str)
+            if not ip.is_global:
+                return False
+        except socket.gaierror:
+            pass  # Unresolvable host — let requests handle it
+        return True
+    except Exception:
+        return False
 
 # ---------- Models ----------
 class ScanReq(BaseModel):
@@ -96,7 +126,7 @@ async def ui():
 
   <div id="results" class="card" style="display:none">
     <div class="row" style="justify-content:space-between">
-      <div><b>Security Score:</b> <span id="score">0</span>/100</div>
+      <div><b>Security Health:</b> <span id="score">0</span>/100 &nbsp;<span class="muted" style="font-size:12px">(higher = better — penalty score: <span id="penalty-display">0</span>)</span></div>
       <div style="min-width:200px;flex:1">
         <div class="progress"><div id="bar" class="bar"></div></div>
       </div>
@@ -106,7 +136,6 @@ async def ui():
 
 <script>
 const el = (id)=>document.getElementById(id);
-const fmt = (n)=>Math.max(0, Math.min(100, parseInt(n||0,10)));
 
 async function post(path, body){
   const r = await fetch(path, {method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body)});
@@ -116,9 +145,17 @@ async function post(path, body){
 
 function render(data){
   el("results").style.display = "block";
-  const score = fmt(data.score);
-  el("score").textContent = score;
-  el("bar").style.width = (score) + "%";
+  const penalty = parseInt(data.score || 0, 10);
+  const MAX_PENALTY = 10;
+  const healthPct = Math.max(0, Math.min(100, Math.round((1 - penalty / MAX_PENALTY) * 100)));
+  const verdict = data.verdict || "";
+  const barColor = verdict === "Red" ? "#b80000" : verdict === "Yellow" ? "#b8860b" : "#22a722";
+  
+  el("score").textContent = healthPct;
+  el("bar").style.width = healthPct + "%";
+  el("bar").style.background = barColor;
+  const pd = document.getElementById("penalty-display");
+  if (pd) pd.textContent = penalty;
 
   const list = el("list");
   list.innerHTML = "";
@@ -155,7 +192,7 @@ el("run").addEventListener("click", async ()=>{
     console.warn(e);
     render({
       url: "https://example.org",
-      score: 64,
+      score: 4,
       verdict: "Yellow",
       stats: {status: 200, content_length: 12345},
       findings: [
@@ -187,6 +224,11 @@ document.addEventListener("click", (e)=>{
 @app.post("/scan")
 async def scan(req: ScanReq):
     target = "https://example.org" if req.demo else (req.url or "https://example.org")
+    if not req.demo and not is_safe_url(target):
+        raise HTTPException(
+            status_code=400,
+            detail="Blocked: target resolves to a private, reserved, or non-HTTP/HTTPS address. DevGuard only scans public URLs."
+        )
     result = scan_url(target, http_check=req.http_check)
     return JSONResponse(content=result)
 
