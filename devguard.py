@@ -295,7 +295,10 @@ def scan(url: str, json_out: str | None, http_check: bool):
     console.print(Panel(verdict_text, title="Security Verdict",
                         border_style=("green" if verdict == "Green" else "yellow" if verdict == "Yellow" else "red")))
 
-    stats = results["stats"]
+    stats = results.get("stats") or {}
+    if "error" in results:
+        console.print(f"[red]Scan error:[/red] {results['error']}")
+        sys.exit(1)
     stats_text = f"[bold]Status:[/bold] {stats['status']}  |  [bold]Content Length:[/bold] {stats['content_length']:,} bytes"
     console.print(Panel(stats_text, title="Response Summary"))
 
