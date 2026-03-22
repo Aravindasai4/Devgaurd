@@ -240,13 +240,21 @@ def scan_url(url: str, http_check: bool = False) -> dict:
     """Programmatic wrapper used by FastAPI."""
     url = normalize_url(url)
     scanner = SecurityScanner()
+    try:
+        resp = requests.get(url, timeout=TIMEOUT, headers=DEFAULT_HEADERS)
+    except requests.exceptions.Timeout:
+        return {"url": url, "error": "Request timed out. The target did not respond within 15 seconds.", "score": 0, "verdict": "Error", "stats": {}, "findings": []}
+    except requests.exceptions.SSLError as e:
+        return {"url": url, "error": f"SSL error: {e}", "score": 0, "verdict": "Error", "stats": {}, "findings": []}
+    except requests.exceptions.ConnectionError as e:
+        return {"url": url, "error": f"Connection failed: {e}", "score": 0, "verdict": "Error", "stats": {}, "findings": []}
+    except requests.exceptions.RequestException as e:
+        return {"url": url, "error": f"Request failed: {e}", "score": 0, "verdict": "Error", "stats": {}, "findings": []}
 
-    resp = requests.get(url, timeout=TIMEOUT, headers=DEFAULT_HEADERS)
     scanner.check_https_hsts(resp, url, http_check=http_check)
     scanner.check_csp(resp)
     scanner.check_cors(url)
     scanner.check_cookies(resp, url)
-
     verdict, _ = scanner.verdict()
     stats = {
         "status": resp.status_code,
